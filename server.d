@@ -1,4 +1,5 @@
-import std.stdio, std.socket, core.thread, std.file, std.string;
+import std.stdio, std.socket, core.thread, std.file, std.string, std.getopt;
+import core.sys.posix.signal, core.sys.posix.stdlib;
 import util;
 
 const uint PORT = 8004;
@@ -6,37 +7,55 @@ const uint PORT = 8004;
 string[] queue;
 string[] completed;
 bool[string] in_progress;
-	
+
+Socket server;
+
+extern(C) {
+	void cleanup(int s) nothrow @nogc @system {
+		try {
+			server.close();
+			exit(0);
+		}
+		catch (Exception e) {}
+	}
+}
+
 void send_file(Socket conn, string fname) {
 	writef("send_file(%s)\n", fname);
+	conn.sendPacket("ok".representation);
 	conn.sendPacket(fname.representation);
 	auto buf = cast(const ubyte[])read(fname);
 	conn.sendPacket(buf);
 }
 
 void send_terminate(Socket conn) {
-	//TODO: 
+	conn.sendPacket("terminate".representation);
 }
-
+/+
 void send_string_array(Socket conn, const string[] arr) {
 	//TODO:
-}
+}+/
 
-void main() {
-	Socket server, conn;
+int main(string[] argv) {
+	string outdir;
+	auto opt = getopt(argv,
+		//std.getopt.config.required, "indir", &indir,
+		std.getopt.config.required, "outdir", &outdir,
+	);
+	if (opt.helpWanted) {
+		defaultGetoptPrinter(format("Usage: %s [flags] filelist\n", argv[0]), opt.options);
+		return 1;
+	}
+	queue = argv[1..$];
+
+	Socket conn;
 
 	server = new Socket(AddressFamily.INET, SocketType.STREAM, ProtocolType.TCP);
 	scope(exit) server.close();
+	signal(SIGINT, &cleanup);
 	server.bind(new InternetAddress(InternetAddress.ADDR_ANY, PORT));
 	server.listen(64);
 	writef("listening\n");
-
-	//TODO: getopt
-
-	foreach (i; 0..32) {
-		queue ~= "foo";
-		queue ~= "bar";
-	}
 
 	while (queue.length + in_progress.length > 0) {
 		try {
@@ -49,6 +68,7 @@ void main() {
 			}
 			if (prefix("GET")) {//GET : client requests work unit
 				if (queue.length) {
+					writef("send to %s: %s\n", conn.remoteAddress, queue[0]);
 					conn.send_file(queue[0]);
 					in_progress[queue[0]] = 1;
 					queue  = queue[1..$];
@@ -60,14 +80,18 @@ void main() {
 			else if (prefix("PUT")) {//PUT name : client is returning results for work unit name
 				//TODO: write file to results direcotry
 				auto name = (cast(immutable(char)*)request)[4..request.length];
+				writef("recv from %s: %s\n", conn.remoteAddress, name);
 				in_progress.remove(name);
 				completed ~= name;
 			}
-			else if (prefix("STATUS")) {
+/+			else if (prefix("STATUS")) {
 				//fetch the queue/in_progress/completed sets
 				conn.send_string_array(queue);
 				conn.send_string_array(in_progress.keys);//will need to convert back to associative array on clientside
 				conn.send_string_array(completed);
+			}+/
+			else {
+				stderr.writef("ERROR: unknown packet type; %s\n", request);
 			}
 			
 			//conn.send_file(files[0]);
@@ -86,5 +110,6 @@ void main() {
 
 	//Alternately, maintain a list of active clients, and they need to log out officially before they stop making
 	//requests.  If I do this, in_progress should be string[string], and map to the client's host name.
+	return 0;
 }
 

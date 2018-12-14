@@ -1,17 +1,20 @@
 import std.stdio, std.socket, core.thread, std.file, std.exception, std.conv, std.typecons, std.string, std.regex;
-import std.file, std.random;
+import std.file, std.random, std.parallelism, std.process;
 import core.sys.posix.stdlib;
 
 import util;
 
-string IP = "127.0.0.1";
+string IP = "0.0.0.0";
 const uint PORT = 8004;
 
 string[] buffer;
 
+//Any instance of $FILE will be replaced by the filename it operates on
+string command = "cat $FILE";
+
 alias WorkUnit = Tuple!(string, "name", ubyte[], "data");
 
-auto getFile() {
+auto connect() {
 	Socket conn = new Socket(AddressFamily.INET, SocketType.STREAM, ProtocolType.TCP);
 	scope(exit) conn.close();
 	auto addr = parseAddress(IP, PORT);
@@ -24,6 +27,11 @@ auto getFile() {
 			throw new Exception("Cannot connect to server");
 		}
 	}
+	return conn;
+}
+
+auto getFile() {
+	auto conn = connect();
 
 	conn.sendPacket("GET".representation);
 	auto status = conn.recvPacket;
@@ -35,50 +43,81 @@ auto getFile() {
 	return new WorkUnit(fname, contents);
 }
 
-/+
-auto tmpFile(string prefix) {
-	auto s = prefix ~ "XXXXXX";
-	char[] fname_template = s.toStringz[0..s.length].dup;
-
-	int fd = mkstemp(fname_template.ptr);
-	auto f = File("/dev/stderr", "wb");
-	try {
-		writef("test 0\n");
-		f.fdopen(fd);
-		writef("test 1\n");
-		f.writef("foobar1\n");
-		writef("test 2\n");
-		return f;
-	}
-	catch (Exception e) {
-		writef("%s\n", e.msg);
-	}
-	assert(0);
-}
-+/
-
 //not worried about race conditions here.
 //TODO: write a function that does everything necessary to make this safe. umask, O_CREAT, O_EXCL, etc.
 auto tmpFile(string prefix) {
-	while (1) {
+	//random start point to hopefully find an unused name the first try
+	foreach (i; 0..10000) {
 		string fname = prefix ~ format(".%06x", uniform!"[]"(0, 0xFFFFFF));
 		if (!exists(fname)) return File(fname, "wb");
 	}
+
+	//exhaustive search to guarantee success if possible
+	foreach (suffix; 0..0xFFFFFF) {
+		string fname = prefix ~ format(".%06x", suffix);
+		if (!exists(fname)) return File(fname, "wb");
+	}
+
+	//And apparently we have over 16 million temporary files in this directory.
+	throw new Exception("Could not create new tmpfile");
 }
 
-//TODO: cmd should be passed via getopt. Any instances of $FILE will be replaced by
+//TODO: command should be passed via getopt. Any instances of $FILE will be replaced by
 //the filename.
-void processWorkUnit(WorkUnit wu, string cmd) {
-	auto fname = wu.name;
-	cmd = cmd.replaceAll(ctRegex!`\$FILE`, fname);
+
+void sendResult(string name, string data) {
+	auto conn = connect();
+	conn.sendPacket(format("RESULT %s", name).representation);
+	conn.sendPacket(data.representation);//TODO: should really have this as binary data from the beginning
 }
 
-void main() {
-	foreach (i; 0..2) {
-		writef("iter %s\n", i);
-		writef("recv foo\n");
-		auto a = getFile();
-		if (a is null) return;
+void sendError(string name, int status) {
+	auto conn = connect();
+	conn.sendPacket(format("ERROR %s", name).representation);
+	conn.sendPacket(format("status %s\n", status).representation);
+}
+
+void worker(uint tid) {
+	writef("thread %s start\n", tid);
+	msleep(uniform(0, 1000));//avoid having every client clobbering the server at exactly the same time.
+
+	while (1) {
+		auto packet = getFile();
+		if (packet is null) {
+			writef("Thread %s terminated\n");
+			break;
+		}
+		writef("thread %s : start %s\n", tid, packet.name);
+		auto input = tmpFile(tempDir());
+		input.write(packet.data);//TODO: this is in text mode, not binary. Do something about that.
+
+		writef("input file: %s\n", input.name);
+		
+		auto result = command.replaceAll(ctRegex!`\$FILE`, input.name).executeShell;
+		if (0 == result.status) {
+			sendResult(packet.name, result.output);
+		}
+		else {
+			sendError(packet.name, result.status);
+		}
+		
+		writef("thread %s : finish %s\n", tid, packet.name);
+	}
+	writef("thread %s exit\n", tid);
+}
+
+int main(string[] argv) {
+	IP = argv[1];//TODO: error handling
+	
+	foreach (i; 0..totalCPUs) {
+		task!worker(i).executeInNewThread;
+	}
+	writef("main thread exit\n");
+	return 0;
+/+
+	{
+		writef("%s\n", a.name);
+		//TODO: not loop. per-thread
 
 		string aname = (cast(immutable(char)*)a.name)[0..a.name.length];
 		writef("%s\n", aname);
@@ -90,6 +129,6 @@ void main() {
 	}
 	auto f = tmpFile("foobar");
 	f.writef("foobar\n");
-	return;
+	return;+/
 }
 

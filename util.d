@@ -1,4 +1,4 @@
-import std.socket, std.bitmanip, std.exception;
+import std.socket, std.bitmanip, std.exception, std.format, std.conv;
 import std.stdio;
 
 extern(C) {
@@ -10,31 +10,42 @@ void msleep(uint msec) {
 }
 
 auto sendPacket(Socket conn, const ubyte[] buf) {
-	ubyte[ulong.sizeof] len = nativeToLittleEndian(buf.length);
-	//enforce(len.length == conn.send(len));
-	auto n = conn.send(len);
-	if (len.length != n) {
-		writef("%s != %s : %s\n%s\n", len.length, n, conn.getErrorText, lastSocketError());
-		assert(0);
+	void sendAux(const ubyte[] buf) {
+		ulong totalSent = 0;
+		while (totalSent < buf.length) {
+			auto n = conn.send(buf[totalSent..$]);
+			if (n < 0) {
+				throw new Exception(format("sendPacket failed: %s\n%s", conn.getErrorText, lastSocketError));
+			}
+			totalSent += n;
+		}
 	}
 
-//	writef("send %s: '%s'\n", buf.length, buf);
-	n = conn.send(buf);
-	if (buf.length != n) {
-		writef("%s != %s : %s\n%s\n", buf.length, n, conn.getErrorText, lastSocketError());
-		assert(0);
-		//enforce(buf.length == conn.send(buf));
-	}
+	ubyte[ulong.sizeof] len = nativeToLittleEndian(buf.length);
+	sendAux(len);
+	sendAux(buf);
 }
 
 auto recvPacket(Socket conn) {
-	ubyte[] buf;
-	ubyte[ulong.sizeof] len;
-//	writef("recv %s\n", len.length);
-	conn.receive(len);
-	buf.length = littleEndianToNative!ulong(len);
-//	writef("recv %s\n", buf.length);
-	enforce(buf.length == conn.receive(buf));
-	return buf;
+	auto recvAux(ulong length) {
+		ubyte[] buf;
+		buf.length = length;
+
+		ulong totalReceived = 0;
+		while (totalReceived < length) {
+			auto n = conn.receive(buf[totalReceived..$]);
+			if (n < 0) {
+				throw new Exception(format("recvPacket Failed: %s\n%s", conn.getErrorText, lastSocketError));
+			}
+			totalReceived += n;
+		}
+
+		return buf;
+	}
+
+	auto len = recvAux(ulong.sizeof)
+		.to!(ubyte[ulong.sizeof])
+		.littleEndianToNative!(ulong, ulong.sizeof);
+	return recvAux(len);
 }
 

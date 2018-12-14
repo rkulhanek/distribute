@@ -1,5 +1,5 @@
 import std.stdio, std.socket, core.thread, std.file, std.string, std.getopt;
-import core.sys.posix.signal, core.sys.posix.stdlib;
+import core.sys.posix.signal, core.sys.posix.stdlib, std.regex, std.path;
 import util;
 
 const uint PORT = 8004;
@@ -21,7 +21,6 @@ extern(C) {
 }
 
 void send_file(Socket conn, string fname) {
-	writef("send_file(%s)\n", fname);
 	conn.sendPacket("ok".representation);
 	conn.sendPacket(fname.representation);
 	auto buf = cast(const ubyte[])read(fname);
@@ -48,6 +47,8 @@ int main(string[] argv) {
 	}
 	queue = argv[1..$];
 
+	mkdirRecurse(outdir);
+
 	Socket conn;
 
 	server = new Socket(AddressFamily.INET, SocketType.STREAM, ProtocolType.TCP);
@@ -63,12 +64,17 @@ int main(string[] argv) {
 			scope(exit) conn.close();
 
 			auto request = conn.recvPacket();
+
+			auto hostname = conn.remoteAddress.toHostNameString;
+			if (hostname is null) hostname = conn.remoteAddress.toAddrString;
+
 			bool prefix(string s) {
 				return request.length >= s.length && request[0..s.length] == s;
 			}
+
 			if (prefix("GET")) {//GET : client requests work unit
 				if (queue.length) {
-					writef("send to %s: %s\n", conn.remoteAddress, queue[0]);
+					writef("send to %s: %s\n", hostname, queue[0]);
 					conn.send_file(queue[0]);
 					in_progress[queue[0]] = 1;
 					queue  = queue[1..$];
@@ -77,12 +83,23 @@ int main(string[] argv) {
 					conn.send_terminate();
 				}
 			}
-			else if (prefix("PUT")) {//PUT name : client is returning results for work unit name
+			else if (prefix("RESULT")) {//RESULT name : client is returning results for work unit name
 				//TODO: write file to results direcotry
-				auto name = (cast(immutable(char)*)request)[4..request.length];
-				writef("recv from %s: %s\n", conn.remoteAddress, name);
+				auto name = (cast(immutable(char)*)request)[6..request.length];
+				writef("recv from %s: %s\n", hostname, name);
+				//TODO: store in results directory
+
+				auto data = conn.recvPacket();
+				//TODO: if file name has directory components, remove them. Or make those directories UNDER outdir
+				File(outdir ~ "/" ~ name.baseName, "wb").write(data);
+				
 				in_progress.remove(name);
 				completed ~= name;
+			}
+			else if (prefix("ERROR")) {//ERROR name : details of error in packet
+				auto name = (cast(immutable(char)*)request)[6..request.length];
+				stderr.writef("error reported from %s: %s\n%s\n", hostname, name, conn.recvPacket());
+				//TODO: include stderr in packet
 			}
 /+			else if (prefix("STATUS")) {
 				//fetch the queue/in_progress/completed sets

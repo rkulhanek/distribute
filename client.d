@@ -1,22 +1,19 @@
 import std.stdio, std.socket, core.thread, std.file, std.exception, std.conv, std.typecons, std.string, std.regex;
-import std.file, std.random, std.parallelism, std.process;
+import std.file, std.random, std.parallelism, std.process, std.getopt;
 import core.sys.posix.stdlib;
 
 import util;
 
-string IP = "0.0.0.0";
+shared string IP;
 const uint PORT = 8004;
-
-string[] buffer;
-
-//Any instance of $FILE will be replaced by the filename it operates on
-string command = "cat $FILE";
+shared string command;
+uint tid;
 
 alias WorkUnit = Tuple!(string, "name", ubyte[], "data");
 
 auto connect() {
 	Socket conn = new Socket(AddressFamily.INET, SocketType.STREAM, ProtocolType.TCP);
-	scope(exit) conn.close();
+	writef("IP = %s:%s\n", IP, PORT);
 	auto addr = parseAddress(IP, PORT);
 
 	uint count = 0;
@@ -32,6 +29,7 @@ auto connect() {
 
 auto getFile() {
 	auto conn = connect();
+	scope(exit) conn.close();
 
 	conn.sendPacket("GET".representation);
 	auto status = conn.recvPacket;
@@ -67,28 +65,39 @@ auto tmpFile(string prefix) {
 
 void sendResult(string name, string data) {
 	auto conn = connect();
+	scope(exit) conn.close();
 	conn.sendPacket(format("RESULT %s", name).representation);
 	conn.sendPacket(data.representation);//TODO: should really have this as binary data from the beginning
 }
 
 void sendError(string name, int status) {
 	auto conn = connect();
+	scope(exit) conn.close();
 	conn.sendPacket(format("ERROR %s", name).representation);
 	conn.sendPacket(format("status %s\n", status).representation);
 }
 
-void worker(uint tid) {
+void worker(uint thread_id) {
+	tid = thread_id;
 	writef("thread %s start\n", tid);
 	msleep(uniform(0, 1000));//avoid having every client clobbering the server at exactly the same time.
 
+	void test(uint i) {
+		stderr.writef("test %s-%s\n", tid, i);
+	}
+
 	while (1) {
+		test(0);
 		auto packet = getFile();
+		test(1);
 		if (packet is null) {
-			writef("Thread %s terminated\n");
+			test(2);
+			writef("Thread %s terminated\n", tid);
 			break;
 		}
+		test(3);
 		writef("thread %s : start %s\n", tid, packet.name);
-		auto input = tmpFile(tempDir());
+		auto input = tmpFile(tempDir() ~ "/workunit");
 		input.write(packet.data);//TODO: this is in text mode, not binary. Do something about that.
 
 		writef("input file: %s\n", input.name);
@@ -107,12 +116,27 @@ void worker(uint tid) {
 }
 
 int main(string[] argv) {
-	IP = argv[1];//TODO: error handling
+	//Any instance of $FILE will be replaced by the filename it operates on
+	string cmd = "./run.sh '$FILE'";
+	string ip = "0.0.0.0";
+
+	auto opt = getopt(argv,
+		//std.getopt.config.required, "indir", &indir,
+		std.getopt.config.required, "server-ip", &ip,
+		std.getopt.config.required, "command", &cmd,
+	);
+	command = cmd;
+	IP = ip;
+	if (opt.helpWanted) {
+		defaultGetoptPrinter(format("Usage: %s --server-ip IP --command COMMAND\n", argv[0]), opt.options);
+		return 1;
+	}
+	writef("IP: %s\n", IP);
 	
 	foreach (i; 0..totalCPUs) {
 		task!worker(i).executeInNewThread;
 	}
-	writef("main thread exit\n");
+	worker(64);
 	return 0;
 /+
 	{

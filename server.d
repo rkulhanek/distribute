@@ -1,11 +1,13 @@
 import std.stdio, std.socket, core.thread, std.file, std.string, std.getopt;
 import core.sys.posix.signal, core.sys.posix.stdlib, std.regex, std.path;
 import util;
+import std.utf;
 
 const uint PORT = 8004;
 
 string[] queue;
 string[] completed;
+string[] failed;
 bool[string] in_progress;
 
 Socket server;
@@ -14,10 +16,16 @@ extern(C) {
 	void cleanup(int s) nothrow @nogc @system {
 		try {
 			server.close();
+			printf("Cleanup\n");
 			exit(0);
 		}
 		catch (Exception e) {}
 	}
+}
+
+string stringify(T)(T buf) {
+	string s = cast(string)(buf).toUTF8;
+	return s;
 }
 
 void send_file(Socket conn, string fname) {
@@ -53,6 +61,7 @@ int main(string[] argv) {
 
 	server = new Socket(AddressFamily.INET, SocketType.STREAM, ProtocolType.TCP);
 	scope(exit) server.close();
+	server.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, 1);
 	signal(SIGINT, &cleanup);
 	server.bind(new InternetAddress(InternetAddress.ADDR_ANY, PORT));
 	server.listen(64);
@@ -98,7 +107,12 @@ int main(string[] argv) {
 			}
 			else if (prefix("ERROR")) {//ERROR name : details of error in packet
 				auto name = (cast(immutable(char)*)request)[6..request.length];
-				stderr.writef("error reported from %s: %s\n%s\n", hostname, name, conn.recvPacket());
+				stderr.writef("error reported from %s: %s\n%s\n", hostname, name.stringify, cast(string)(conn.recvPacket()));
+				stderr.writef("error reported from %s: %s\n%s\n", hostname, name.stringify, conn.recvPacket());
+				stderr.flush();
+
+				in_progress.remove(name);
+				failed ~= name;
 				//TODO: include stderr in packet
 			}
 /+			else if (prefix("STATUS")) {
@@ -119,6 +133,8 @@ int main(string[] argv) {
 			//TODO: also print network error
 		}
 	}
+
+	writef("Failed: %s\n", failed);
 
 	//TODO: will reach this point before all clients have received a terminate.
 	//have it accept here for another minute or so to clean up remaining clients.

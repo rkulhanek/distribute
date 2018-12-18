@@ -23,16 +23,9 @@ extern(C) {
 	}
 }
 
-
 string stringify(T)(T buf) {
-/+	auto s = buf
-		.map!(a => a.to!byte)
-		.map!(a => a.to!char)
-		.array.idup;
-		+/
 	string s;
 	import std.ascii;
-	//auto buf2 = [100, 97, 116, 97, 47, 115, 101, 114, 118, 101, 114, 46, 100].map!(a => a.to!char).array;
 	foreach (i, x; buf) {
 		char c = x;
 		if (!isPrintable(c) && !isWhite(c)) {
@@ -43,10 +36,6 @@ string stringify(T)(T buf) {
 	writef("stringify(%s [%s]) -> %s [%s]\n", buf, typeid(buf), s, typeid(s));
 	return s;
 }
-/+
-ubyte[] string2bytes(string s) {
-	return s.toStringz[0..s.length].dup;
-}+/
 
 void send_file(Socket conn, string fname) {
 	conn.sendPacket("ok");
@@ -58,10 +47,6 @@ void send_file(Socket conn, string fname) {
 void send_terminate(Socket conn) {
 	conn.sendPacket("terminate");
 }
-/+
-void send_string_array(Socket conn, const string[] arr) {
-	//TODO:
-}+/
 
 void summary() {
 	auto total = queue.length + in_progress.length + failed.length + completed.length;
@@ -72,7 +57,6 @@ void summary() {
 int main(string[] argv) {
 	string outdir;
 	auto opt = getopt(argv,
-		//std.getopt.config.required, "indir", &indir,
 		std.getopt.config.required, "outdir", &outdir,
 	);
 	if (opt.helpWanted) {
@@ -81,7 +65,7 @@ int main(string[] argv) {
 	}
 	queue = argv[1..$];
 
-	mkdirRecurse(outdir);
+	mkdirRecurse(outdir ~ "/failures");
 
 	Socket conn;
 
@@ -122,35 +106,24 @@ int main(string[] argv) {
 				//TODO: write file to results direcotry
 				//auto name = (cast(immutable(char)*)request)[6..request.length];
 				string name = request[7..request.length].assumeUTF;
-				writef("recv from %s: %s\n", hostname, name);
-				//TODO: store in results directory
 
-				ubyte[] data = conn.recvPacket();
-				writef("# %s\n%s\n", name, data.assumeUTF);
-				//TODO: if file name has directory components, remove them. Or make those directories UNDER outdir
-				//File(outdir ~ "/" ~ name.baseName, "wb").write(data.assumeUTF); //TODO: not assumeUTF. This should work for binary data.
-				//std.file.write(outdir ~ "/" ~ name.baseName, data);
-				File(outdir ~ "/" ~ name.baseName, "wb").rawWrite(data);
+				writef("recv from %s: %s\n", hostname, name);
+				File(outdir ~ "/" ~ name.baseName ~ ".stdout", "wb").rawWrite(conn.recvPacket);
+				File(outdir ~ "/" ~ name.baseName ~ ".stderr", "wb").rawWrite(conn.recvPacket);
 				
-				summary();
-				writef("BEFORE: %s\n", in_progress.length);
-				writef("name: '%s'\nin_progress: %s\n", name, in_progress);
 				in_progress.remove(name);
-				writef("AFTER: %s\n", in_progress.length);
 				completed ~= name;
-				summary();
 			}
 			else if (prefix("ERROR")) {//ERROR name : details of error in packet
-				auto name = (cast(immutable(char)*)request)[6..request.length];
+				string name = request[6..request.length].assumeUTF;
 				auto packet = conn.recvPacket();
-//				writef("A: %s\nB: %s\nname: %s\nB name: %s\n", typeid(packet), typeid(packet.stringify), typeid(name), typeid(name.stringify));
-				stderr.writef("error reported from %s: %s\n%s\n", hostname, name, packet.assumeUTF);
-//				stderr.writef("B error reported from %s: %s\n%s\n", hostname, name.stringify, packet);
+
+				writef("error reported from %s: %s\n%s\n", hostname, name, packet.assumeUTF);
+				File(outdir ~ "/failures/" ~ name.baseName ~ ".stdout", "wb").rawWrite(conn.recvPacket);
+				File(outdir ~ "/failures/" ~ name.baseName ~ ".stderr", "wb").rawWrite(conn.recvPacket);
 
 				in_progress.remove(name);
 				failed ~= name;
-				//TODO: include stderr in packet
-				summary();
 			}
 /+			else if (prefix("STATUS")) {
 				//fetch the queue/in_progress/completed sets
@@ -161,9 +134,7 @@ int main(string[] argv) {
 			else {
 				stderr.writef("ERROR: unknown packet type; %s\n", request);
 			}
-			
-			//conn.send_file(files[0]);
-			//files = files[1..$];
+			summary();
 		}
 		catch (Exception e) {
 			stderr.writef("%s\n", e.msg);

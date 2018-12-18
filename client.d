@@ -13,7 +13,6 @@ alias WorkUnit = Tuple!(string, "name", ubyte[], "data");
 
 auto connect() {
 	Socket conn = new Socket(AddressFamily.INET, SocketType.STREAM, ProtocolType.TCP);
-	writef("IP = %s:%s\n", IP, PORT);
 	auto addr = parseAddress(IP, PORT);
 
 	uint count = 0;
@@ -72,10 +71,7 @@ void sendResult(string name, int status, File stdout, File stderr) {
 	}
 	else {
 		conn.sendPacket(format("ERROR %s", name));
-		//conn.sendPacket(format("status %s\n", status).representation);
 	}
-	writef("# sendResult for %s\n", name);
-	writef("status: %s\n", status);
 
 	void sendFile(File f) {
 		ubyte[] readAll(File f) {
@@ -83,14 +79,12 @@ void sendResult(string name, int status, File stdout, File stderr) {
 			ubyte[1024] buf;
 			while (!f.eof) {
 				auto tmp = f.rawRead(buf);
-				writef("read %s bytes\n", tmp.length);
 				all ~= tmp;
 			}
 			return all;
 		}
 
 		auto buf = readAll(f);
-		writef("%s\n", buf.assumeUTF);
 		conn.sendPacket(buf);
 	}
 
@@ -103,34 +97,21 @@ void worker(uint thread_id) {
 	writef("thread %s start\n", tid);
 	msleep(uniform(0, 1000));//avoid having every client clobbering the server at exactly the same time.
 
-	void test(uint i) {
-		stderr.writef("test %s-%s\n", tid, i);
-	}
-
 	while (1) {
-		test(0);
 		auto packet = getFile();
-		test(1);
 		if (packet is null) {
-			test(2);
 			writef("Thread %s terminated\n", tid);
 			break;
 		}
-		test(3);
 		writef("thread %s : start %s\n", tid, packet.name);
 		auto input = tmpFile(tempDir() ~ "/workunit");
-		input.rawWrite(packet.data);//TODO: this is in text mode, not binary. Do something about that.
+		input.rawWrite(packet.data);//TODO: this may be in text mode, not binary. Do something about that.
 		input.flush();
-
-		writef("input file: %s\n", input.name);
 		
 		auto cmd = command.replaceAll(ctRegex!`\$FILE`, input.name);
-		writef("cmd = '%s'\n", cmd);
-//		auto pipes = cmd.pipeShell(Redirect.all);
-		auto pipes = pipeProcess([ "./run.sh", input.name ]);
+		auto pipes = cmd.pipeShell(Redirect.all);
 		auto status = pipes.pid.wait();
 
-		//sendResult(packet.name, result.output);
 		sendResult(packet.name, status, pipes.stdout, pipes.stderr);
 		
 		writef("thread %s : finish %s\n", tid, packet.name);
@@ -144,7 +125,6 @@ int main(string[] argv) {
 	string ip = "0.0.0.0";
 
 	auto opt = getopt(argv,
-		//std.getopt.config.required, "indir", &indir,
 		std.getopt.config.required, "server-ip", &ip,
 		std.getopt.config.required, "command", &cmd,
 	);
@@ -156,28 +136,12 @@ int main(string[] argv) {
 	}
 	writef("IP: %s\n", IP);
 
-	auto nThreads = 1;//totalCPUs;
+	auto nThreads = totalCPUs;
 	
 	foreach (i; 0..nThreads) {
 		task!worker(i).executeInNewThread;
 	}
 	worker(64);
 	return 0;
-/+
-	{
-		writef("%s\n", a.name);
-		//TODO: not loop. per-thread
-
-		string aname = (cast(immutable(char)*)a.name)[0..a.name.length];
-		writef("%s\n", aname);
-		writef("%s: %s\n", a.name, a.data);
-		writef("recv bar\n");
-		auto b = getFile();
-		if (b is null) return;
-		writef("%s: %s\n", b.name, b.data);
-	}
-	auto f = tmpFile("foobar");
-	f.writef("foobar\n");
-	return;+/
 }
 

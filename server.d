@@ -1,7 +1,7 @@
 import std.stdio, std.socket, core.thread, std.file, std.string, std.getopt;
 import core.sys.posix.signal, core.sys.posix.stdlib, std.regex, std.path;
+import std.utf, std.algorithm, std.conv, std.array;
 import util;
-import std.utf;
 
 const uint PORT = 8004;
 
@@ -23,25 +23,51 @@ extern(C) {
 	}
 }
 
+
 string stringify(T)(T buf) {
-	string s = cast(string)(buf).toUTF8;
+/+	auto s = buf
+		.map!(a => a.to!byte)
+		.map!(a => a.to!char)
+		.array.idup;
+		+/
+	string s;
+	import std.ascii;
+	//auto buf2 = [100, 97, 116, 97, 47, 115, 101, 114, 118, 101, 114, 46, 100].map!(a => a.to!char).array;
+	foreach (i, x; buf) {
+		char c = x;
+		if (!isPrintable(c) && !isWhite(c)) {
+			writef("Unprintable char: %c -> %x\n", c, c);
+		}
+		s ~= c;
+	}
+	writef("stringify(%s [%s]) -> %s [%s]\n", buf, typeid(buf), s, typeid(s));
 	return s;
 }
+/+
+ubyte[] string2bytes(string s) {
+	return s.toStringz[0..s.length].dup;
+}+/
 
 void send_file(Socket conn, string fname) {
-	conn.sendPacket("ok".representation);
-	conn.sendPacket(fname.representation);
+	conn.sendPacket("ok");
+	conn.sendPacket(fname);
 	auto buf = cast(const ubyte[])read(fname);
 	conn.sendPacket(buf);
 }
 
 void send_terminate(Socket conn) {
-	conn.sendPacket("terminate".representation);
+	conn.sendPacket("terminate");
 }
 /+
 void send_string_array(Socket conn, const string[] arr) {
 	//TODO:
 }+/
+
+void summary() {
+	auto total = queue.length + in_progress.length + failed.length + completed.length;
+	writef("Queue: %s/%s  In Progress: %s   Completed: %s/%s   Failed: %s\n", 
+		queue.length, total, in_progress.length, completed.length, total, failed.length);
+}
 
 int main(string[] argv) {
 	string outdir;
@@ -94,26 +120,36 @@ int main(string[] argv) {
 			}
 			else if (prefix("RESULT")) {//RESULT name : client is returning results for work unit name
 				//TODO: write file to results direcotry
-				auto name = (cast(immutable(char)*)request)[6..request.length];
+				//auto name = (cast(immutable(char)*)request)[6..request.length];
+				string name = request[7..request.length].assumeUTF;
 				writef("recv from %s: %s\n", hostname, name);
 				//TODO: store in results directory
 
-				auto data = conn.recvPacket();
+				ubyte[] data = conn.recvPacket();
+				writef("# %s\n%s\n", name, data.assumeUTF);
 				//TODO: if file name has directory components, remove them. Or make those directories UNDER outdir
-				File(outdir ~ "/" ~ name.baseName, "wb").write(data);
+				//File(outdir ~ "/" ~ name.baseName, "wb").write(data.assumeUTF); //TODO: not assumeUTF. This should work for binary data.
+				std.file.write(outdir ~ "/" ~ name.baseName, data);
 				
+				summary();
+				writef("BEFORE: %s\n", in_progress.length);
+				writef("name: '%s'\nin_progress: %s\n", name, in_progress);
 				in_progress.remove(name);
+				writef("AFTER: %s\n", in_progress.length);
 				completed ~= name;
+				summary();
 			}
 			else if (prefix("ERROR")) {//ERROR name : details of error in packet
 				auto name = (cast(immutable(char)*)request)[6..request.length];
-				stderr.writef("error reported from %s: %s\n%s\n", hostname, name.stringify, cast(string)(conn.recvPacket()));
-				stderr.writef("error reported from %s: %s\n%s\n", hostname, name.stringify, conn.recvPacket());
-				stderr.flush();
+				auto packet = conn.recvPacket();
+//				writef("A: %s\nB: %s\nname: %s\nB name: %s\n", typeid(packet), typeid(packet.stringify), typeid(name), typeid(name.stringify));
+				stderr.writef("error reported from %s: %s\n%s\n", hostname, name, packet.assumeUTF);
+//				stderr.writef("B error reported from %s: %s\n%s\n", hostname, name.stringify, packet);
 
 				in_progress.remove(name);
 				failed ~= name;
 				//TODO: include stderr in packet
+				summary();
 			}
 /+			else if (prefix("STATUS")) {
 				//fetch the queue/in_progress/completed sets
@@ -134,7 +170,12 @@ int main(string[] argv) {
 		}
 	}
 
-	writef("Failed: %s\n", failed);
+	if (failed.length) {
+		writef("# Failed work units\n");
+		foreach (s; failed) {
+			writef("%s\n", s);
+		}
+	}
 
 	//TODO: will reach this point before all clients have received a terminate.
 	//have it accept here for another minute or so to clean up remaining clients.

@@ -35,7 +35,7 @@ auto getFile() {
 	auto status = conn.recvPacket;
 	if ("ok" != status) return null;
 
-	auto fname = conn.recvPacket.to!string;
+	string fname = conn.recvPacket.assumeUTF;
 	auto contents = conn.recvPacket;
 
 	return new WorkUnit(fname, contents);
@@ -102,6 +102,8 @@ void worker(uint thread_id) {
 
 		writef("input file: %s\n", input.name);
 		
+		auto cmd = command.replaceAll(ctRegex!`\$FILE`, input.name);
+		writef("cmd = '%s'\n", cmd);
 		auto result = command.replaceAll(ctRegex!`\$FILE`, input.name).executeShell;
 		if (0 == result.status) {
 			sendResult(packet.name, result.output);
@@ -132,8 +134,10 @@ int main(string[] argv) {
 		return 1;
 	}
 	writef("IP: %s\n", IP);
+
+	auto nThreads = 1;//totalCPUs;
 	
-	foreach (i; 0..totalCPUs) {
+	foreach (i; 0..nThreads) {
 		task!worker(i).executeInNewThread;
 	}
 	worker(64);

@@ -1,5 +1,5 @@
 import std.socket, std.bitmanip, std.exception, std.format, std.conv;
-import std.stdio;
+import std.stdio, std.string;
 
 extern(C) {
 	int usleep(uint);
@@ -24,6 +24,10 @@ auto sendPacket(Socket conn, const ubyte[] buf) {
 	ubyte[ulong.sizeof] len = nativeToLittleEndian(buf.length);
 	sendAux(len);
 	sendAux(buf);
+}
+
+auto sendPacket(Socket conn, string s) {
+	return sendPacket(conn, s.representation);
 }
 
 auto recvPacket(Socket conn) {

@@ -63,18 +63,39 @@ auto tmpFile(string prefix) {
 //TODO: command should be passed via getopt. Any instances of $FILE will be replaced by
 //the filename.
 
-void sendResult(string name, string data) {
+void sendResult(string name, int status, File stdout, File stderr) {
 	auto conn = connect();
 	scope(exit) conn.close();
-	conn.sendPacket(format("RESULT %s", name).representation);
-	conn.sendPacket(data.representation);//TODO: should really have this as binary data from the beginning
-}
 
-void sendError(string name, int status) {
-	auto conn = connect();
-	scope(exit) conn.close();
-	conn.sendPacket(format("ERROR %s", name).representation);
-	conn.sendPacket(format("status %s\n", status).representation);
+	if (0 == status) {
+		conn.sendPacket(format("RESULT %s", name));
+	}
+	else {
+		conn.sendPacket(format("ERROR %s", name));
+		//conn.sendPacket(format("status %s\n", status).representation);
+	}
+	writef("# sendResult for %s\n", name);
+	writef("status: %s\n", status);
+
+	void sendFile(File f) {
+		ubyte[] readAll(File f) {
+			ubyte[] all;
+			ubyte[1024] buf;
+			while (!f.eof) {
+				auto tmp = f.rawRead(buf);
+				writef("read %s bytes\n", tmp.length);
+				all ~= tmp;
+			}
+			return all;
+		}
+
+		auto buf = readAll(f);
+		writef("%s\n", buf.assumeUTF);
+		conn.sendPacket(buf);
+	}
+
+	sendFile(stdout);
+	sendFile(stderr);
 }
 
 void worker(uint thread_id) {
@@ -98,19 +119,19 @@ void worker(uint thread_id) {
 		test(3);
 		writef("thread %s : start %s\n", tid, packet.name);
 		auto input = tmpFile(tempDir() ~ "/workunit");
-		input.write(packet.data);//TODO: this is in text mode, not binary. Do something about that.
+		input.rawWrite(packet.data);//TODO: this is in text mode, not binary. Do something about that.
+		input.flush();
 
 		writef("input file: %s\n", input.name);
 		
 		auto cmd = command.replaceAll(ctRegex!`\$FILE`, input.name);
 		writef("cmd = '%s'\n", cmd);
-		auto result = command.replaceAll(ctRegex!`\$FILE`, input.name).executeShell;
-		if (0 == result.status) {
-			sendResult(packet.name, result.output);
-		}
-		else {
-			sendError(packet.name, result.status);
-		}
+//		auto pipes = cmd.pipeShell(Redirect.all);
+		auto pipes = pipeProcess([ "./run.sh", input.name ]);
+		auto status = pipes.pid.wait();
+
+		//sendResult(packet.name, result.output);
+		sendResult(packet.name, status, pipes.stdout, pipes.stderr);
 		
 		writef("thread %s : finish %s\n", tid, packet.name);
 	}

@@ -129,7 +129,8 @@ int main(string[] argv) {
 				writef("# %s\n%s\n", name, data.assumeUTF);
 				//TODO: if file name has directory components, remove them. Or make those directories UNDER outdir
 				//File(outdir ~ "/" ~ name.baseName, "wb").write(data.assumeUTF); //TODO: not assumeUTF. This should work for binary data.
-				std.file.write(outdir ~ "/" ~ name.baseName, data);
+				//std.file.write(outdir ~ "/" ~ name.baseName, data);
+				File(outdir ~ "/" ~ name.baseName, "wb").rawWrite(data);
 				
 				summary();
 				writef("BEFORE: %s\n", in_progress.length);
